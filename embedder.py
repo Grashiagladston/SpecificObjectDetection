@@ -1,5 +1,6 @@
 import io
 from google import genai
+from google.genai import types
 from config import GEMINI_API_KEY
 
 def get_gemini_client():
@@ -21,7 +22,7 @@ def generate_embedding(pil_image):
     response = client.models.generate_content(
         model="gemini-2.0-flash",
         contents=[
-            img_bytes, 
+            types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), 
             "Describe the visual features, colors, shapes, layout, and objects in this image in extreme detail for image matching."
         ]
     )
