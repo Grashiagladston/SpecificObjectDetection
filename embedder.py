@@ -1,38 +1,36 @@
-import torch
-from PIL import Image
-import torchvision.transforms as transforms
-import torchvision.models as models
+import io
+from google import genai
+from config import GEMINI_API_KEY
 
-def get_embedding_model():
-    if not hasattr(get_embedding_model, 'model'):
-        model = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
-        model.eval()
-        get_embedding_model.model = model
-    return get_embedding_model.model
+def get_gemini_client():
+    if not hasattr(get_gemini_client, 'client'):
+        get_gemini_client.client = genai.Client(api_key=GEMINI_API_KEY)
+    return get_gemini_client.client
 
 def generate_embedding(pil_image):
-    model = get_embedding_model()
+    client = get_gemini_client()
     
+    # Convert PIL Image to bytes
+    buffered = io.BytesIO()
     if pil_image.mode != 'RGB':
         pil_image = pil_image.convert('RGB')
-        
-    preprocess = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    pil_image.save(buffered, format="JPEG")
+    img_bytes = buffered.getvalue()
     
-    input_tensor = preprocess(pil_image)
-    input_batch = input_tensor.unsqueeze(0)
+    # Step 1: Use Gemini to describe the image (lightweight)
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=[
+            img_bytes, 
+            "Describe the visual features, colors, shapes, layout, and objects in this image in extreme detail for image matching."
+        ]
+    )
+    description = response.text
     
-    with torch.no_grad():
-        output = model(input_batch)
-        
-    embedding_vector = output.squeeze().numpy().tolist()
-    magnitude = sum(x**2 for x in embedding_vector) ** 0.5
+    # Step 2: Embed the description (very small & fast)
+    result = client.models.embed_content(
+        model="text-embedding-004",
+        contents=description
+    )
     
-    if magnitude > 0:
-        embedding_vector = [x / magnitude for x in embedding_vector]
-        
-    return embedding_vector
+    return result.embeddings[0].values
