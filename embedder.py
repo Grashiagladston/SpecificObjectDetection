@@ -24,7 +24,7 @@ def generate_embedding(pil_image):
 
     # Generate description of image
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         contents=[
             pil_image,
             "Describe the visual features, colors, shapes, objects, textures, layout, and important details of this image for accurate image matching."
