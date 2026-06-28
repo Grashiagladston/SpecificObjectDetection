@@ -23,7 +23,7 @@ from database import (
 from detector import ObjectDetector  # Changed from GeminiDetector
 from draw_boxes import draw_annotations
 from crop_utils import crop_detected_objects
-from embedder import generate_embedding
+from embedder import generate_embedding, generate_embeddings_batch
 
 # --- Setup ---
 st.set_page_config(
@@ -291,12 +291,14 @@ with tab_hub:
                     
                     # Generate embeddings for crops (In Memory)
                     crop_embeddings = []
-                    for crop_item in crops_data:
-                        crop_emb = generate_embedding(crop_item['image'])
-                        crop_embeddings.append({
-                            'label': crop_item['label'],
-                            'embedding': crop_emb
-                        })
+                    if crops_data:
+                        crop_images = [c['image'] for c in crops_data]
+                        batch_embs = generate_embeddings_batch(crop_images)
+                        for crop_item, crop_emb in zip(crops_data, batch_embs):
+                            crop_embeddings.append({
+                                'label': crop_item['label'],
+                                'embedding': crop_emb
+                            })
                     
                     # Success Box
                     st.markdown(f"""

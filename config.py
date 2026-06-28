@@ -17,6 +17,9 @@ HF_TOKEN = os.getenv("HF_TOKEN", "")
 # OpenRouter Key (Fallback - FREE)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
+# Gemini API Key (Official - FREE tier available)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
 # Database
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_NAME = os.getenv("DB_NAME", "omnicount_db")

@@ -3,6 +3,7 @@ import os
 import requests
 import base64
 import io
+import json
 import numpy as np
 from PIL import Image
 from openai import OpenAI
@@ -48,21 +49,41 @@ def generate_embedding(image, target_object=None):
                 image = image.convert("RGB")
 
             # Generate description of image
-            response = client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=[
-                    image,
-                    "Describe the visual features, colors, shapes, objects, textures, layout, and important details of this image for accurate image matching."
-                ],
-            )
+            import time
+            for attempt in range(3):
+                try:
+                    response = client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=[
+                            image,
+                            "Describe the visual features, colors, shapes, objects, textures, layout, and important details of this image for accurate image matching."
+                        ],
+                    )
+                    break
+                except Exception as e:
+                    if "429" in str(e) or "Quota" in str(e) or "limit" in str(e).lower():
+                        if attempt < 2:
+                            time.sleep(2 * (attempt + 1))
+                            continue
+                    raise e
+
             description = response.text
 
             if description:
                 # Generate embedding from description
-                embedding_response = client.models.embed_content(
-                    model="text-embedding-004",
-                    contents=description,
-                )
+                for attempt in range(3):
+                    try:
+                        embedding_response = client.models.embed_content(
+                            model="gemini-embedding-2",
+                            contents=description,
+                        )
+                        break
+                    except Exception as e:
+                        if "429" in str(e) or "Quota" in str(e) or "limit" in str(e).lower():
+                            if attempt < 2:
+                                time.sleep(2 * (attempt + 1))
+                                continue
+                        raise e
                 print("✅ Used Gemini GenAI for Embedding")
                 return embedding_response.embeddings[0].values
         except Exception as e:
@@ -104,10 +125,12 @@ def generate_embedding(image, target_object=None):
             
             models = [
                 "openrouter/free",
-                "qwen/qwen-2.5-vl-7b-instruct:free",
-                "qwen/qwen2.5-vl-72b-instruct:free",
-                "meta-llama/llama-3.2-11b-vision-instruct",
-                "google/gemini-2.0-flash"
+                "google/gemma-4-31b-it:free",
+                "google/gemma-4-26b-a4b-it:free",
+                "nvidia/nemotron-nano-12b-v2-vl:free",
+                "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+                "google/gemini-2.0-flash-001",
+                "google/gemini-2.5-flash"
             ]
             
             last_exception = None
@@ -152,6 +175,89 @@ def generate_embedding(image, target_object=None):
             
         except Exception as e2:
             raise Exception(f"All embedding APIs failed. OpenRouter Error: {e2}")
+
+def generate_embeddings_batch(images, target_object=None):
+    if not images:
+        return []
+        
+    # Try 1: Gemini via official google-genai SDK (Batched)
+    if HAS_GENAI and GEMINI_API_KEY:
+        try:
+            client = get_gemini_client()
+            
+            # Prepare the contents list for Gemini
+            contents = []
+            for i, img in enumerate(images):
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                contents.append(f"Image {i+1}:")
+                contents.append(img)
+            
+            prompt = (
+                "Describe the visual features, colors, shapes, objects, textures, layout, and important details of each image listed above, in order, for accurate image matching. "
+                "Return a JSON object with a 'descriptions' key containing a list of strings, one description for each image in the exact order they were provided."
+            )
+            contents.append(prompt)
+            
+            from google.genai import types
+            import time
+            for attempt in range(3):
+                try:
+                    response = client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.1
+                        )
+                    )
+                    break
+                except Exception as e:
+                    if "429" in str(e) or "Quota" in str(e) or "limit" in str(e).lower():
+                        if attempt < 2:
+                            time.sleep(3 * (attempt + 1))
+                            continue
+                    raise e
+            
+            res_text = response.text
+            if res_text:
+                data = json.loads(res_text.strip())
+                descriptions = data.get("descriptions", [])
+                
+                if len(descriptions) == len(images):
+                    for attempt in range(3):
+                        try:
+                            embedding_response = client.models.embed_content(
+                                model="gemini-embedding-2",
+                                contents=descriptions,
+                            )
+                            break
+                        except Exception as e:
+                            if "429" in str(e) or "Quota" in str(e) or "limit" in str(e).lower():
+                                if attempt < 2:
+                                    time.sleep(2 * (attempt + 1))
+                                    continue
+                            raise e
+                    print(f"✅ Used Gemini GenAI for Batch Embedding ({len(images)} images)")
+                    return [emb.values for emb in embedding_response.embeddings]
+                else:
+                    print(f"⚠️ Gemini GenAI Batch returned {len(descriptions)} descriptions for {len(images)} images. Falling back...")
+        except Exception as e:
+            print(f"⚠️ Gemini GenAI Batch Embedding Failed ({str(e)[:50]}). Falling back...")
+            
+    # Fallback: Generate one by one
+    results = []
+    for i, img in enumerate(images):
+        if i > 0:
+            import time
+            time.sleep(1.5)
+        try:
+            emb = generate_embedding(img, target_object)
+            results.append(emb)
+        except Exception as e:
+            print(f"⚠️ Individual embedding failed: {e}")
+            results.append(None)
+    return results
 
 def cosine_similarity(embedding1, embedding2):
     e1 = np.array(embedding1)

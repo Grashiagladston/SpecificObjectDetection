@@ -9,6 +9,15 @@ from PIL import Image
 from openai import OpenAI
 from config import HF_TOKEN, OPENROUTER_API_KEY
 
+# Try importing google-genai for Gemini support
+try:
+    from google import genai
+    from config import GEMINI_API_KEY
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+    GEMINI_API_KEY = ""
+
 # Ensure stdout/stderr handle unicode characters on Windows
 if sys.platform.startswith("win"):
     try:
@@ -34,6 +43,11 @@ class DetectionResult:
     def __repr__(self):
         return f"DetectionResult(objects={self.objects})"
 
+def get_gemini_client():
+    if not hasattr(get_gemini_client, "client"):
+        get_gemini_client.client = genai.Client(api_key=GEMINI_API_KEY)
+    return get_gemini_client.client
+
 class ObjectDetector:
     def __init__(self):
         self.detection_url = "https://api-inference.huggingface.co/models/facebook/detr-resnet-50"
@@ -50,9 +64,26 @@ class ObjectDetector:
         return base64.b64encode(self._pil_to_bytes(image)).decode()
     
     def detect(self, image, target_object, max_retries=2):
-        """Try HuggingFace first, fallback to OpenRouter Gemini/Llama"""
+        """Try official Gemini GenAI first (if key exists), then HuggingFace, then OpenRouter"""
         
-        # TRY 1: HuggingFace DETR
+        # TRY 1: Official Gemini GenAI SDK
+        if HAS_GENAI and GEMINI_API_KEY:
+            try:
+                raw_objects = self._detect_gemini_genai(image, target_object)
+                wrapped_objects = [
+                    DetectedObject(
+                        label=obj.get("label", target_object),
+                        is_target=obj.get("is_target", True),
+                        box_2d=obj.get("box_2d") or obj.get("bbox"),
+                        score=obj.get("score", 1.0)
+                    ) for obj in raw_objects
+                ]
+                print("✅ Used Gemini GenAI for Detection")
+                return DetectionResult(wrapped_objects)
+            except Exception as e:
+                print(f"⚠️ Gemini GenAI Detection Failed ({str(e)[:50]}). Falling back...")
+        
+        # TRY 2: HuggingFace DETR
         try:
             raw_objects = self._detect_hf(image, target_object, max_retries)
             wrapped_objects = [
@@ -120,6 +151,56 @@ class ObjectDetector:
             })
         return [obj for obj in objects if obj["is_target"]]
 
+    def _detect_gemini_genai(self, image, target_object):
+        client = get_gemini_client()
+        
+        # Ensure RGB format
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+            
+        prompt = f"""
+        Identify and locate all instances of '{target_object}' in this image. For each object:
+        1. "label": object name
+        2. "is_target": true if it matches '{target_object}', else false
+        3. "box_2d": [ymin, xmin, ymax, xmax] normalized 0-1000 scale
+        
+        Return ONLY this JSON format:
+        {{"objects": [{{"box_2d": [ymin, xmin, ymax, xmax], "label": "name", "is_target": true}}]}}
+        If none found: {{"objects": []}}
+        """
+        
+        from google.genai import types
+        import time
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[image, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.1
+                    )
+                )
+                break
+            except Exception as e:
+                if "429" in str(e) or "Quota" in str(e) or "limit" in str(e).lower():
+                    if attempt < 2:
+                        time.sleep(3 * (attempt + 1))
+                        continue
+                raise e
+        
+        content = response.text
+        if not content:
+            raise Exception("Gemini returned empty content")
+            
+        data = json.loads(content.strip())
+        objects = data.get("objects", [])
+        for obj in objects:
+            obj["bbox"] = obj.get("box_2d", [])
+            if "score" not in obj:
+                obj["score"] = 1.0
+        return objects
+
     def _detect_openrouter(self, image, target_object):
         if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "sk-placeholder":
             raise Exception("HuggingFace blocked AND OpenRouter key is missing!")
@@ -145,10 +226,12 @@ class ObjectDetector:
         
         models = [
             "openrouter/free",
-            "qwen/qwen-2.5-vl-7b-instruct:free",
-            "qwen/qwen2.5-vl-72b-instruct:free",
-            "meta-llama/llama-3.2-11b-vision-instruct",
-            "google/gemini-2.0-flash"
+            "google/gemma-4-31b-it:free",
+            "google/gemma-4-26b-a4b-it:free",
+            "nvidia/nemotron-nano-12b-v2-vl:free",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            "google/gemini-2.0-flash-001",
+            "google/gemini-2.5-flash"
         ]
         
         last_exception = None
