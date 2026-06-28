@@ -16,8 +16,6 @@ try:
             user=config.DB_USER,
             password=config.DB_PASSWORD
         )
-    
-    conn = get_connection()
 
 except Exception as e:
     print(f"Connection error: {e}")
@@ -29,6 +27,7 @@ except Exception as e:
 # ============================================
 def drop_old_tables():
     """Drop old tables completely"""
+    conn = get_connection()
     cur = conn.cursor()
     try:
         old_tables = [
@@ -50,6 +49,7 @@ def drop_old_tables():
         raise e
     finally:
         cur.close()
+        conn.close()
 
 
 # ============================================
@@ -57,10 +57,10 @@ def drop_old_tables():
 # ============================================
 def init_db():
     """Initialize DB using normal FLOAT[] instead of VECTOR"""
+    conn = get_connection()
     cur = conn.cursor()
     
     try:
-        # Detection runs table - using FLOAT[]
         cur.execute("""
             CREATE TABLE IF NOT EXISTS detection_runs (
                 image_id VARCHAR(50) PRIMARY KEY,
@@ -72,7 +72,6 @@ def init_db():
             );
         """)
         
-        # Crop embeddings table - using FLOAT[]
         cur.execute("""
             CREATE TABLE IF NOT EXISTS crop_embeddings (
                 id SERIAL PRIMARY KEY,
@@ -91,6 +90,7 @@ def init_db():
         raise e
     finally:
         cur.close()
+        conn.close()
 
 
 # ============================================
@@ -105,6 +105,10 @@ def calculate_cosine_similarity(emb1, emb2):
     a = np.array(emb1, dtype=np.float64)
     b = np.array(emb2, dtype=np.float64)
     
+    # --- FIX: Check if dimensions match ---
+    if a.shape != b.shape:
+        return 0.0  # Skip if they don't match (e.g. old DB records)
+        
     # Calculate cosine similarity
     dot_product = np.dot(a, b)
     norm_a = np.linalg.norm(a)
@@ -122,6 +126,7 @@ def calculate_cosine_similarity(emb1, emb2):
 def save_embeddings_only(image_id, original_image_name, target_object, 
                          detected_count, full_image_embedding, crop_embeddings):
     """Save only image ID and embeddings - NO image data"""
+    conn = get_connection()
     cur = conn.cursor()
     
     try:
@@ -146,6 +151,7 @@ def save_embeddings_only(image_id, original_image_name, target_object,
         raise e
     finally:
         cur.close()
+        conn.close()
 
 
 # ============================================
@@ -153,10 +159,10 @@ def save_embeddings_only(image_id, original_image_name, target_object,
 # ============================================
 def find_similar_images(embedding, threshold=0.85):
     """Find similar images using Python cosine similarity"""
+    conn = get_connection()
     cur = conn.cursor()
     
     try:
-        # Fetch ALL embeddings from database
         cur.execute("""
             SELECT image_id, timestamp, original_image_name, target_object, 
                    detected_count, full_image_embedding
@@ -166,21 +172,16 @@ def find_similar_images(embedding, threshold=0.85):
         all_rows = cur.fetchall()
         results = []
         
-        # Calculate similarity in Python
         for row in all_rows:
             db_emb = row[5] # full_image_embedding is at index 5
             if db_emb:
                 similarity = calculate_cosine_similarity(embedding, db_emb)
                 
-                # Check if it meets the threshold
                 if similarity >= threshold:
                     db_row = (row[0], row[1], row[2], row[3], row[4], row[5])
                     results.append((db_row, similarity))
         
-        # Sort by highest similarity first
         results.sort(key=lambda x: x[1], reverse=True)
-        
-        # Return top 5 matches
         return results[:5]
         
     except Exception as e:
@@ -188,6 +189,7 @@ def find_similar_images(embedding, threshold=0.85):
         raise e
     finally:
         cur.close()
+        conn.close()
 
 
 # ============================================
@@ -195,6 +197,7 @@ def find_similar_images(embedding, threshold=0.85):
 # ============================================
 def get_history_records():
     """Get all detection records - NO image data"""
+    conn = get_connection()
     cur = conn.cursor()
     
     try:
@@ -233,6 +236,7 @@ def get_history_records():
         raise e
     finally:
         cur.close()
+        conn.close()
 
 
 # ============================================
@@ -240,6 +244,7 @@ def get_history_records():
 # ============================================
 def clear_all_history():
     """Clear all records"""
+    conn = get_connection()
     cur = conn.cursor()
     
     try:
@@ -253,3 +258,4 @@ def clear_all_history():
         raise e
     finally:
         cur.close()
+        conn.close()
