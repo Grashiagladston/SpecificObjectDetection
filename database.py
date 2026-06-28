@@ -6,9 +6,14 @@ from datetime import datetime
 # DATABASE CONNECTION
 # ============================================
 try:
+    import os
     import config
     
     def get_connection():
+        db_url = os.getenv("DATABASE_URL")
+        if db_url:
+            # Render automatically provides DATABASE_URL when a database is linked
+            return psycopg2.connect(db_url)
         return psycopg2.connect(
             host=config.DB_HOST,
             port=config.DB_PORT,
